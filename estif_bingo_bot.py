@@ -29,7 +29,7 @@ import random
 from datetime import datetime
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = "8593313629:AAERZCJwvtg16XglkxBCDVzFZxuB1Cd4iiY"
+BOT_TOKEN = "8593313629:AAGLz9l6G4ZXHNIgenbOPhBhUcmDl_wTcKg"
 ADMIN_CHAT_ID = "7160486597"
 
 # Your group and channel links
