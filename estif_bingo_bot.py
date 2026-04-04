@@ -1,6 +1,7 @@
 # ========== FLASK WEB SERVER FOR RENDER (KEEP ALIVE) ==========
 from flask import Flask
 import threading
+import os
 
 flask_app = Flask(__name__)
 
@@ -10,12 +11,13 @@ def health():
     return "✅ Estif Bingo Bot is alive!", 200
 
 def run_webserver():
-    flask_app.run(host='0.0.0.0', port=8080)
+    port = int(os.environ.get('PORT', 8080))
+    flask_app.run(host='0.0.0.0', port=port)
 
 # Start web server in background thread
 webserver_thread = threading.Thread(target=run_webserver, daemon=True)
 webserver_thread.start()
-print("🌐 Web server started on port 8080")
+print(f"🌐 Web server started on port {os.environ.get('PORT', 8080)}")
 print("🤖 Starting Telegram bot...")
 
 import logging
