@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: estif-bingo-bot
+    runtime: python
+    repo: https://github.com/johnsonestiph13/estif-bingo-bot
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python estif_bingo_bot.py
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        value: "8593313629:AAERZCJwvtg16XglkxBCDVzFZxuB1Cd4iiY"
+      - key: ADMIN_CHAT_ID
+        value: "7160486597"
