@@ -10,6 +10,6 @@ services:
     healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
-        value: "8593313629:AAERZCJwvtg16XglkxBCDVzFZxuB1Cd4iiY"
+        value: "8593313629:AAGLz9l6G4ZXHNIgenbOPhBhUcmDl_wTcKg"
       - key: ADMIN_CHAT_ID
         value: "7160486597"
