@@ -3,17 +3,18 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboard
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import json
 import os
+import random
 from datetime import datetime
 
 # ========== CONFIGURATION ==========
 BOT_TOKEN = "8593313629:AAERZCJwvtg16XglkxBCDVzFZxuB1Cd4iiY"
 ADMIN_CHAT_ID = "7160486597"
 
-# Your group and channel links (REPLACE THESE!)
+# Your group and channel links
 SUPPORT_GROUP_LINK = "https://t.me/presectionA"
 SUPPORT_CHANNEL_LINK = "https://t.me/temarineh"
 
-# Game link (REPLACE THIS!)
+# Game link
 GAME_WEB_URL = "https://estif-bingo-247.onrender.com/player.html"
 
 # Account Holder Name
@@ -58,7 +59,7 @@ def update_user(user_id, key, value):
         user[key] = value
         save_user(user_id, user)
 
-# ========== MAIN MENU (3x3 GRID - 2 ROWS, 3 COLUMNS) ==========
+# ========== MAIN MENU (6 BUTTONS) ==========
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton("🎮 Play"), KeyboardButton("📝 Register"), KeyboardButton("💰 Deposit")],
@@ -166,9 +167,11 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'last_name': user.last_name,
         'phone': phone_number,
         'balance': 0,
+        'total_deposited': 0,
         'registered': True,
         'joined_group': True,
-        'registered_at': datetime.now().isoformat()
+        'registered_at': datetime.now().isoformat(),
+        'pending_withdrawals': []
     }
     save_user(user_id, user_data)
     
@@ -193,6 +196,13 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== 3. DEPOSIT BUTTON ==========
 async def deposit_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    user_data = get_user(user_id)
+    
+    if not user_data or not user_data.get('registered'):
+        await update.message.reply_text("❌ Please register first using the **Register** button!", reply_markup=get_main_keyboard())
+        return
+    
     if await check_joined_group(update, context, 'deposit'):
         await show_deposit_options(update.message, context)
 
@@ -236,24 +246,35 @@ async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'step': 'waiting_amount'
     }
 
-async def handle_deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ========== DEPOSIT HANDLERS ==========
+async def handle_deposit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text messages during deposit flow"""
+    # Check if user is in deposit flow
     if 'pending_deposit' not in context.user_data:
         return
     
-    try:
-        amount = float(update.message.text)
-        context.user_data['pending_deposit']['amount'] = amount
-        context.user_data['pending_deposit']['step'] = 'waiting_screenshot'
-        
-        await update.message.reply_text(
-            f"✅ Amount: {amount} Birr\n\n"
-            f"📸 **Please send the payment screenshot now:**"
-        )
-    except ValueError:
-        await update.message.reply_text("❌ Please send a valid number (e.g., 100)")
+    current_step = context.user_data['pending_deposit'].get('step')
+    
+    if current_step == 'waiting_amount':
+        try:
+            amount = float(update.message.text.strip())
+            context.user_data['pending_deposit']['amount'] = amount
+            context.user_data['pending_deposit']['step'] = 'waiting_screenshot'
+            
+            await update.message.reply_text(
+                f"✅ Amount: {amount} Birr\n\n"
+                f"📸 **Please send the payment screenshot now:**"
+            )
+        except ValueError:
+            await update.message.reply_text("❌ Please send a valid number (e.g., 100)")
 
-async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_deposit_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo messages during deposit flow"""
+    # Check if user is in deposit flow waiting for screenshot
     if 'pending_deposit' not in context.user_data:
+        return
+    
+    if context.user_data['pending_deposit'].get('step') != 'waiting_screenshot':
         return
     
     user = update.effective_user
@@ -264,7 +285,7 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("❌ Please send a photo/screenshot")
         return
     
-    admin_text = f"""💰 **DEPOSIT REQUEST**
+    admin_text = f"""💰 **NEW DEPOSIT REQUEST**
 
 👤 User: {user.first_name} (@{user.username or 'N/A'})
 🆔 ID: {user.id}
@@ -273,7 +294,8 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
 💰 Amount: {deposit_data['amount']} Birr
 📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-⏳ Status: Pending Approval"""
+✅ **Approve:** `/approve_deposit {user.id} {deposit_data['amount']}`
+❌ **Reject:** `/reject_deposit {user.id} {deposit_data['amount']}`"""
     
     await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text, parse_mode='Markdown')
     await context.bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=photo.file_id, caption=f"Deposit proof from @{user.username or user.id}")
@@ -281,8 +303,7 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
     await update.message.reply_text(
         f"✅ **Deposit Request Sent!**\n\n"
         f"💰 Amount: {deposit_data['amount']} Birr\n"
-        f"🏦 Method: {deposit_data['account']}\n"
-        f"👤 Account Holder: {ACCOUNT_HOLDER}\n\n"
+        f"🏦 Method: {deposit_data['account']}\n\n"
         f"⏳ **Waiting for admin approval...**\n"
         f"You'll be notified once confirmed.\n\n"
         f"Thank you for your patience! 🙏",
@@ -290,19 +311,59 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
         parse_mode='Markdown'
     )
     
+    # Clear deposit data
     context.user_data['pending_deposit'] = None
 
 # ========== 4. CASH OUT BUTTON ==========
 async def cashout_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    user_data = get_user(user_id)
+    
+    # Clear any pending cashout state
+    context.user_data['pending_cashout'] = False
+    context.user_data['cashout_step'] = None
+    context.user_data['cashout_amount'] = None
+    context.user_data['cashout_method'] = None
+    
+    # Check if registered
+    if not user_data or not user_data.get('registered'):
+        await update.message.reply_text("❌ Please register first using the **Register** button!", reply_markup=get_main_keyboard())
+        return
+    
+    # Check if deposited at least 100 Birr
+    total_deposited = user_data.get('total_deposited', 0)
+    if total_deposited < 100:
+        await update.message.reply_text(
+            f"❌ **Cash Out Not Allowed**\n\n"
+            f"💰 Total Deposited: {total_deposited} Birr\n"
+            f"⚠️ Minimum required: 100 Birr\n\n"
+            f"Please deposit at least 100 Birr before cashing out.",
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    # Check balance
+    balance = user_data.get('balance', 0)
+    if balance <= 0:
+        await update.message.reply_text(
+            f"❌ **Insufficient Balance**\n\n"
+            f"💰 Your balance: 0 Birr\n\n"
+            f"Please play and win first!",
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
     if await check_joined_group(update, context, 'cashout'):
         await show_cashout_options(update.message, context)
 
 async def show_cashout_options(message, context):
     keyboard = [
-        [InlineKeyboardButton("CBE", callback_data="cashout_CBE")],
-        [InlineKeyboardButton("ABBISINIYA", callback_data="cashout_ABBISINIYA")],
-        [InlineKeyboardButton("TELEBIRR", callback_data="cashout_TELEBIRR")],
-        [InlineKeyboardButton("MPESA", callback_data="cashout_MPESA")]
+        [InlineKeyboardButton("🏦 CBE", callback_data="cashout_CBE")],
+        [InlineKeyboardButton("🏦 ABBISINIYA", callback_data="cashout_ABBISINIYA")],
+        [InlineKeyboardButton("📱 TELEBIRR", callback_data="cashout_TELEBIRR")],
+        [InlineKeyboardButton("📱 MPESA", callback_data="cashout_MPESA")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await message.reply_text(
@@ -319,48 +380,129 @@ async def cashout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     method = query.data.replace("cashout_", "")
     context.user_data['cashout_method'] = method
     
+    user_id = str(query.from_user.id)
+    user_data = get_user(user_id)
+    balance = user_data.get('balance', 0) if user_data else 0
+    
     await query.edit_message_text(
         f"✅ **Selected: {method}**\n\n"
-        f"📝 **Please enter your account number or phone number:**\n\n"
-        f"Example: `0912345678` or `1000179576997`\n\n"
-        f"💳 Send your {method} account number:",
+        f"💰 **Your Balance:** {balance} Birr\n\n"
+        f"📝 **Step 1 of 2:**\n"
+        f"Please enter the **amount** you want to withdraw:\n\n"
+        f"✅ Minimum: 50 Birr\n"
+        f"✅ Maximum: 10,000 Birr\n\n"
+        f"Example: `500`",
         parse_mode='Markdown'
     )
     context.user_data['pending_cashout'] = True
+    context.user_data['cashout_step'] = 'waiting_amount'
 
-async def handle_cashout_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ========== CASHOUT HANDLERS ==========
+async def handle_cashout_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text messages during cashout flow"""
+    # Check if user is in cashout flow
     if not context.user_data.get('pending_cashout'):
         return
     
     user = update.effective_user
-    account_number = update.message.text
-    method = context.user_data.get('cashout_method', 'Unknown')
+    user_id = str(user.id)
+    user_data = get_user(user_id)
     
-    admin_text = f"""💳 **CASH OUT REQUEST**
+    if not user_data:
+        await update.message.reply_text("❌ Please register first!")
+        context.user_data['pending_cashout'] = False
+        return
+    
+    step = context.user_data.get('cashout_step', 'waiting_amount')
+    
+    # ========== STEP 1: GET AMOUNT ==========
+    if step == 'waiting_amount':
+        try:
+            amount = float(update.message.text.strip())
+            
+            if amount < 50:
+                await update.message.reply_text("❌ Minimum withdrawal is 50 Birr. Please enter a valid amount:")
+                return
+            
+            if amount > 10000:
+                await update.message.reply_text("❌ Maximum withdrawal is 10,000 Birr. Please enter a smaller amount:")
+                return
+            
+            current_balance = user_data.get('balance', 0)
+            if amount > current_balance:
+                await update.message.reply_text(f"❌ Insufficient balance! Your balance: {current_balance} Birr. Please enter a lower amount:")
+                return
+            
+            context.user_data['cashout_amount'] = amount
+            context.user_data['cashout_step'] = 'waiting_account'
+            
+            method = context.user_data.get('cashout_method', 'Unknown')
+            
+            await update.message.reply_text(
+                f"✅ **Amount accepted: {amount} Birr**\n\n"
+                f"📝 **Step 2 of 2:**\n"
+                f"Please enter your **{method} account number** or **phone number**:\n\n"
+                f"Example: `0912345678`",
+                parse_mode='Markdown'
+            )
+            
+        except ValueError:
+            await update.message.reply_text("❌ Invalid amount! Please enter a number (e.g., 500):")
+        return
+    
+    # ========== STEP 2: GET ACCOUNT NUMBER ==========
+    if step == 'waiting_account':
+        account_number = update.message.text.strip()
+        amount = context.user_data.get('cashout_amount', 0)
+        method = context.user_data.get('cashout_method', 'Unknown')
+        
+        if not account_number:
+            await update.message.reply_text("❌ Please enter a valid account number:")
+            return
+        
+        request_id = random.randint(10000, 99999)
+        
+        user_data['pending_withdrawals'] = user_data.get('pending_withdrawals', [])
+        user_data['pending_withdrawals'].append({
+            'id': request_id,
+            'amount': amount,
+            'account': account_number,
+            'method': method,
+            'status': 'pending',
+            'requested_at': datetime.now().isoformat()
+        })
+        save_user(user_id, user_data)
+        
+        admin_text = f"""💳 **CASH OUT REQUEST** #{request_id}
 
 👤 User: {user.first_name} (@{user.username or 'N/A'})
 🆔 ID: {user.id}
 🏦 Method: {method}
+💰 Amount: {amount} Birr
 📱 Account: {account_number}
-📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📊 Balance: {user_data.get('balance', 0)} Birr
 
-⏳ Status: Pending Approval"""
-    
-    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text, parse_mode='Markdown')
-    
-    await update.message.reply_text(
-        f"✅ **Cash Out Request Sent!**\n\n"
-        f"💳 Method: {method}\n"
-        f"📱 Account: {account_number}\n\n"
-        f"⏳ **Waiting for admin approval...**\n"
-        f"You'll be notified once processed.\n\n"
-        f"Thank you for your patience! 🙏",
-        reply_markup=get_main_keyboard(),
-        parse_mode='Markdown'
-    )
-    
-    context.user_data['pending_cashout'] = False
-    context.user_data['cashout_method'] = None
+✅ Approve: /approve_cashout {user.id} {amount} {request_id}
+❌ Reject: /reject_cashout {user.id} {request_id}"""
+        
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text, parse_mode='Markdown')
+        
+        await update.message.reply_text(
+            f"✅ **Cash Out Request Sent!** ✅\n\n"
+            f"💰 Amount: **{amount} Birr**\n"
+            f"💳 Method: {method}\n"
+            f"📱 Account: `{account_number}`\n"
+            f"🆔 Request ID: `{request_id}`\n\n"
+            f"⏳ Waiting for admin approval...",
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+        
+        context.user_data['pending_cashout'] = False
+        context.user_data['cashout_step'] = None
+        context.user_data['cashout_amount'] = None
+        context.user_data['cashout_method'] = None
+        return
 
 # ========== 5. CONTACT CENTER BUTTON ==========
 async def contact_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -437,11 +579,12 @@ async def check_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_data = get_user(user_id)
     
-    if user_data:
+    if user_data and user_data.get('registered'):
         await update.message.reply_text(
             f"💰 **Your Balance**\n\n"
             f"🎮 Main Balance: {user_data.get('balance', 0)} Birr\n"
-            f"📊 Status: {'Active' if user_data.get('registered') else 'Not Registered'}",
+            f"📊 Total Deposited: {user_data.get('total_deposited', 0)} Birr\n"
+            f"✅ Status: Active",
             reply_markup=get_main_keyboard(),
             parse_mode='Markdown'
         )
@@ -479,20 +622,41 @@ async def approve_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         user_data = get_user(str(user_id))
         if user_data:
-            new_balance = user_data.get('balance', 0) + amount
-            update_user(str(user_id), 'balance', new_balance)
+            current_balance = user_data.get('balance', 0)
+            current_total = user_data.get('total_deposited', 0)
+            
+            update_user(str(user_id), 'balance', current_balance + amount)
+            update_user(str(user_id), 'total_deposited', current_total + amount)
             
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"✅ **Deposit Approved!** 🎉\n\n"
-                f"💰 Amount: {amount} Birr added\n"
-                f"💵 New Balance: {new_balance} Birr\n\n"
-                f"Thank you for playing Estif Bingo! 🎮",
-                parse_mode='Markdown'
+                text=f"✅ **DEPOSIT APPROVED!**\n\n💰 {amount} Birr added\n💵 New Balance: {current_balance + amount} Birr",
+                parse_mode='Markdown',
+                reply_markup=get_main_keyboard()
             )
             await update.message.reply_text(f"✅ Deposit of {amount} Birr approved for user {user_id}")
-    except (IndexError, ValueError):
+    except:
         await update.message.reply_text("Usage: /approve_deposit USER_ID AMOUNT")
+
+async def reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) != ADMIN_CHAT_ID:
+        await update.message.reply_text("❌ Admin only")
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        amount = float(context.args[1]) if len(context.args) > 1 else 0
+        reason = ' '.join(context.args[2:]) if len(context.args) > 2 else "Not specified"
+        
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"❌ **DEPOSIT REJECTED**\n\n💰 Amount: {amount} Birr\n📝 Reason: {reason}\n\nContact support.",
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+        await update.message.reply_text(f"✅ Deposit rejected for user {user_id}")
+    except:
+        await update.message.reply_text("Usage: /reject_deposit USER_ID AMOUNT [reason]")
 
 async def approve_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) != ADMIN_CHAT_ID:
@@ -502,33 +666,93 @@ async def approve_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = int(context.args[0])
         amount = float(context.args[1])
+        request_id = context.args[2] if len(context.args) > 2 else "Unknown"
         
         user_data = get_user(str(user_id))
         if user_data:
-            new_balance = user_data.get('balance', 0) - amount
-            update_user(str(user_id), 'balance', max(0, new_balance))
+            withdrawals = user_data.get('pending_withdrawals', [])
+            for w in withdrawals:
+                if str(w.get('id')) == str(request_id):
+                    w['status'] = 'approved'
+                    break
+            
+            current_balance = user_data.get('balance', 0)
+            update_user(str(user_id), 'balance', max(0, current_balance - amount))
+            update_user(str(user_id), 'pending_withdrawals', withdrawals)
             
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"✅ **Cash Out Approved!** 💳\n\n"
-                f"💰 Amount: {amount} Birr sent\n"
-                f"💵 Remaining Balance: {max(0, new_balance)} Birr\n\n"
-                f"Thank you for playing Estif Bingo! 🎮",
-                parse_mode='Markdown'
+                text=f"✅ **CASH OUT APPROVED!**\n\n💰 {amount} Birr sent\n💵 Remaining: {max(0, current_balance - amount)} Birr",
+                parse_mode='Markdown',
+                reply_markup=get_main_keyboard()
             )
-            await update.message.reply_text(f"✅ Cash out of {amount} Birr approved for user {user_id}")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Usage: /approve_cashout USER_ID AMOUNT")
+            await update.message.reply_text(f"✅ Cash out of {amount} Birr approved")
+    except:
+        await update.message.reply_text("Usage: /approve_cashout USER_ID AMOUNT REQUEST_ID")
+
+async def reject_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) != ADMIN_CHAT_ID:
+        await update.message.reply_text("❌ Admin only")
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        request_id = context.args[1] if len(context.args) > 1 else "Unknown"
+        reason = ' '.join(context.args[2:]) if len(context.args) > 2 else "Not specified"
+        
+        user_data = get_user(str(user_id))
+        if user_data:
+            withdrawals = user_data.get('pending_withdrawals', [])
+            for w in withdrawals:
+                if str(w.get('id')) == str(request_id):
+                    w['status'] = 'rejected'
+                    w['reject_reason'] = reason
+                    break
+            update_user(str(user_id), 'pending_withdrawals', withdrawals)
+            
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ **CASH OUT REJECTED**\n\n🆔 Request: {request_id}\n📝 Reason: {reason}\n\nContact support.",
+                parse_mode='Markdown',
+                reply_markup=get_main_keyboard()
+            )
+            await update.message.reply_text(f"✅ Cash out request {request_id} rejected")
+    except:
+        await update.message.reply_text("Usage: /reject_cashout USER_ID REQUEST_ID [reason]")
+
+# ========== UNIVERSAL TEXT HANDLER ==========
+async def handle_all_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all text messages - route to appropriate handler based on user state"""
+    
+    # First priority: Deposit flow
+    if 'pending_deposit' in context.user_data:
+        await handle_deposit_text(update, context)
+        return
+    
+    # Second priority: Cashout flow
+    if context.user_data.get('pending_cashout'):
+        await handle_cashout_text(update, context)
+        return
+    
+    # No active flow - ignore or show menu
+    await update.message.reply_text(
+        "Please use the menu buttons below:",
+        reply_markup=get_main_keyboard()
+    )
 
 # ========== MAIN FUNCTION ==========
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
+    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("approve_deposit", approve_deposit))
+    app.add_handler(CommandHandler("reject_deposit", reject_deposit))
     app.add_handler(CommandHandler("approve_cashout", approve_cashout))
+    app.add_handler(CommandHandler("reject_cashout", reject_cashout))
     app.add_handler(CommandHandler("balance", check_balance))
     
+    # Button handlers (6 buttons)
     app.add_handler(MessageHandler(filters.Regex("🎮 Play"), play_button))
     app.add_handler(MessageHandler(filters.Regex("📝 Register"), register_button))
     app.add_handler(MessageHandler(filters.Regex("💰 Deposit"), deposit_button))
@@ -536,22 +760,26 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("📞 Contact Center"), contact_button))
     app.add_handler(MessageHandler(filters.Regex("🎉 Invite"), invite_button))
     
+    # Contact handler
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     
+    # Callback handlers
     app.add_handler(CallbackQueryHandler(joined_callback, pattern="joined"))
     app.add_handler(CallbackQueryHandler(deposit_callback, pattern="deposit_"))
     app.add_handler(CallbackQueryHandler(cashout_callback, pattern="cashout_"))
     app.add_handler(CallbackQueryHandler(copy_link_callback, pattern="copy_link"))
     
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🎮 Play|📝 Register|💰 Deposit|💳 Cash Out|📞 Contact Center|🎉 Invite)"), handle_deposit_amount))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_deposit_screenshot))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🎮 Play|📝 Register|💰 Deposit|💳 Cash Out|📞 Contact Center|🎉 Invite)"), handle_cashout_account))
+    # Photo handler for deposit screenshots
+    app.add_handler(MessageHandler(filters.PHOTO, handle_deposit_photo))
     
+    # Universal text handler (routes to deposit or cashout based on user state)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_text))
+    
+    print("=" * 50)
     print("🤖 Estif Bingo Bot is running...")
-    print(f"👤 Account Holder Name: {ACCOUNT_HOLDER}")
+    print(f"👤 Account Holder: {ACCOUNT_HOLDER}")
     print(f"🎮 Game URL: {GAME_WEB_URL}")
-    print(f"📢 Group: {SUPPORT_GROUP_LINK}")
-    print(f"📢 Channel: {SUPPORT_CHANNEL_LINK}")
+    print("=" * 50)
     app.run_polling()
 
 if __name__ == "__main__":
