@@ -1,4 +1,3 @@
-
 # ========== FLASK WEB SERVER FOR RENDER ==========
 from flask import Flask
 import threading
@@ -464,10 +463,10 @@ async def handle_all_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'method': data['method']
             }
             
-            # Create inline keyboard with copy buttons
+            # Create inline keyboard with ACTUAL COMMAND TEXT on buttons
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 Copy Approve Command", callback_data=f"copy_approve_cashout_{request_id}")],
-                [InlineKeyboardButton("📋 Copy Reject Command", callback_data=f"copy_reject_cashout_{user_id}")]
+                [InlineKeyboardButton(f"/approve_cashout {user_id} {data['amount']}", callback_data=f"copy_approve_cashout_{request_id}")],
+                [InlineKeyboardButton(f"/reject_cashout {user_id}", callback_data=f"copy_reject_cashout_{user_id}")]
             ])
             
             admin_text = f"""💳 **NEW CASHOUT REQUEST** #{request_id}
@@ -510,10 +509,10 @@ async def handle_deposit_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         'account_number': data['account_number']
     }
     
-    # Create inline keyboard with copy buttons
+    # Create inline keyboard with ACTUAL COMMAND TEXT on buttons
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Copy Approve Command", callback_data=f"copy_approve_deposit_{request_id}")],
-        [InlineKeyboardButton("📋 Copy Reject Command", callback_data=f"copy_reject_deposit_{user_id}")]
+        [InlineKeyboardButton(f"/approve_deposit {user_id} {data['amount']}", callback_data=f"copy_approve_deposit_{request_id}")],
+        [InlineKeyboardButton(f"/reject_deposit {user_id}", callback_data=f"copy_reject_deposit_{user_id}")]
     ])
     
     admin_text = f"""💰 **NEW DEPOSIT REQUEST** #{request_id}
@@ -534,44 +533,44 @@ Click a button below to copy the command, then paste and send:"""
     # RESET FLOW
     reset_flow(context)
 
-# ========== COPY COMMAND CALLBACK (CLICK TO COPY) ==========
+# ========== COPY COMMAND CALLBACK (CLICK TO COPY - SHOWS ACTUAL COMMAND) ==========
 async def copy_command_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     data = query.data
     
-    # Deposit Approve Copy
+    # Deposit Approve - Show actual command
     if data.startswith("copy_approve_deposit_"):
         request_id = data.replace("copy_approve_deposit_", "")
         req = context.bot_data.get(f'deposit_req_{request_id}')
         if req:
             command = f"/approve_deposit {req['user_id']} {req['amount']}"
-            await query.answer(text=f"📋 Command copied:\n\n{command}\n\nNow paste it in the chat and send.", show_alert=True)
+            await query.answer(text=f"{command}", show_alert=True)
         else:
-            await query.answer(text="❌ Request not found or already processed", show_alert=True)
+            await query.answer(text="❌ Request not found", show_alert=True)
     
-    # Deposit Reject Copy
+    # Deposit Reject - Show actual command
     elif data.startswith("copy_reject_deposit_"):
         user_id = data.replace("copy_reject_deposit_", "")
         command = f"/reject_deposit {user_id}"
-        await query.answer(text=f"📋 Command copied:\n\n{command}\n\nNow paste it in the chat and send.", show_alert=True)
+        await query.answer(text=f"{command}", show_alert=True)
     
-    # Cashout Approve Copy
+    # Cashout Approve - Show actual command
     elif data.startswith("copy_approve_cashout_"):
         request_id = data.replace("copy_approve_cashout_", "")
         req = context.bot_data.get(f'cashout_req_{request_id}')
         if req:
             command = f"/approve_cashout {req['user_id']} {req['amount']}"
-            await query.answer(text=f"📋 Command copied:\n\n{command}\n\nNow paste it in the chat and send.", show_alert=True)
+            await query.answer(text=f"{command}", show_alert=True)
         else:
-            await query.answer(text="❌ Request not found or already processed", show_alert=True)
+            await query.answer(text="❌ Request not found", show_alert=True)
     
-    # Cashout Reject Copy
+    # Cashout Reject - Show actual command
     elif data.startswith("copy_reject_cashout_"):
         user_id = data.replace("copy_reject_cashout_", "")
         command = f"/reject_cashout {user_id}"
-        await query.answer(text=f"📋 Command copied:\n\n{command}\n\nNow paste it in the chat and send.", show_alert=True)
+        await query.answer(text=f"{command}", show_alert=True)
 
 # ========== ADMIN COMMANDS ==========
 async def approve_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -616,6 +615,13 @@ async def reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Admin only")
         return
     
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "❌ **Usage:** `/reject_deposit USER_ID`\n\nExample: `/reject_deposit 1077270220`",
+            parse_mode='Markdown'
+        )
+        return
+    
     try:
         user_id = int(context.args[0])
         reason = ' '.join(context.args[1:]) if len(context.args) > 1 else "Not specified"
@@ -632,7 +638,7 @@ async def reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.message.reply_text(f"✅ Deposit rejected for user {user_id}")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}\nUsage: /reject_deposit USER_ID [reason]")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def approve_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) != ADMIN_CHAT_ID:
@@ -688,6 +694,13 @@ async def reject_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Admin only")
         return
     
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "❌ **Usage:** `/reject_cashout USER_ID`\n\nExample: `/reject_cashout 1077270220`",
+            parse_mode='Markdown'
+        )
+        return
+    
     try:
         user_id = int(context.args[0])
         reason = ' '.join(context.args[1:]) if len(context.args) > 1 else "Not specified"
@@ -713,7 +726,7 @@ async def reject_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.message.reply_text(f"✅ Cashout rejected for user {user_id}")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}\nUsage: /reject_cashout USER_ID [reason]")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 # ========== MAIN ==========
 def main():
@@ -754,7 +767,7 @@ def main():
     print(f"👤 Account Holder: {ACCOUNT_HOLDER}")
     print(f"🎮 Game URL: {GAME_WEB_URL}")
     print("🌐 Bilingual: English + Amharic")
-    print("📋 Admin commands are now click-to-copy!")
+    print("📋 Admin commands are now click-to-copy with actual command text!")
     print("=" * 50)
     app.run_polling()
 
