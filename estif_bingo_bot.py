@@ -1,7 +1,9 @@
 # ========== FLASK WEB SERVER FOR RENDER ==========
-from flask import Flask
+from flask import Flask, request, jsonify
 import threading
 import os
+import secrets
+from datetime import datetime, timedelta
 
 flask_app = Flask(__name__)
 
@@ -10,10 +12,86 @@ flask_app = Flask(__name__)
 def health():
     return "✅ Estif Bingo Bot is alive!", 200
 
+# ========== BINGO OTP SYSTEM ==========
+# Store OTP codes with expiry
+BINGO_OTP_STORE = {}  # {telegram_user_id: {'otp': '123456', 'expires': datetime}}
+
+# OTP Configuration
+OTP_EXPIRY_MINUTES = 5
+OTP_LENGTH = 6
+
+def generate_otp():
+    """Generate a 6-digit OTP"""
+    return f"{secrets.randbelow(1000000):06d}"
+
+def store_otp(telegram_user_id):
+    """Generate and store OTP for a user"""
+    otp = generate_otp()
+    BINGO_OTP_STORE[str(telegram_user_id)] = {
+        'otp': otp,
+        'expires': datetime.now() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+    }
+    return otp
+
+def verify_otp(telegram_user_id, user_otp):
+    """Verify OTP for a user"""
+    record = BINGO_OTP_STORE.get(str(telegram_user_id))
+    if not record:
+        return False, "No OTP request found"
+    
+    if datetime.now() > record['expires']:
+        del BINGO_OTP_STORE[str(telegram_user_id)]
+        return False, "OTP expired (5 minutes)"
+    
+    if record['otp'] != user_otp:
+        return False, "Invalid OTP"
+    
+    # OTP is valid, remove it (one-time use)
+    del BINGO_OTP_STORE[str(telegram_user_id)]
+    return True, "OTP verified"
+
+# ========== FLASK API ENDPOINTS FOR NODE.JS SERVER ==========
+@flask_app.route('/api/request-otp', methods=['POST'])
+def api_request_otp():
+    """Node.js server calls this to request OTP for a user"""
+    data = request.json
+    telegram_user_id = data.get('telegramUserId')
+    phone = data.get('phone')
+    
+    if not telegram_user_id:
+        return jsonify({'success': False, 'message': 'telegramUserId required'}), 400
+    
+    # Generate and store OTP
+    otp = store_otp(telegram_user_id)
+    
+    # Send OTP via Telegram to the user (async handled by main bot)
+    # The bot will send the OTP when user requests /bingo
+    return jsonify({'success': True, 'message': 'OTP ready. User must send /bingo to bot.'})
+
+@flask_app.route('/api/verify-otp', methods=['POST'])
+def api_verify_otp():
+    """Node.js server calls this to verify OTP"""
+    data = request.json
+    telegram_user_id = data.get('telegramUserId')
+    otp = data.get('otp')
+    
+    if not telegram_user_id or not otp:
+        return jsonify({'success': False, 'message': 'telegramUserId and otp required'}), 400
+    
+    is_valid, message = verify_otp(telegram_user_id, otp)
+    
+    return jsonify({
+        'success': is_valid,
+        'message': message,
+        'telegramUserId': telegram_user_id
+    })
+
 def run_webserver():
+    """Run Flask server for Node.js integration"""
     port = int(os.environ.get('PORT', 8080))
     flask_app.run(host='0.0.0.0', port=port)
 
+# Start the web server in a separate thread
 threading.Thread(target=run_webserver, daemon=True).start()
 
 # ========== IMPORTS ==========
@@ -77,7 +155,9 @@ TEXTS = {
         'approved_deposit': "✅ *DEPOSIT APPROVED!*\n💰 Amount: {} Birr\n💵 New Balance: {} Birr",
         'approved_cashout': "✅ *CASH OUT APPROVED!*\n💰 Amount: {} Birr\n💵 New Balance: {} Birr",
         'rejected': "❌ *REJECTED*\n📝 Reason: {}",
-        'use_menu': "Please use the menu buttons below:"
+        'use_menu': "Please use the menu buttons below:",
+        'bingo_otp': "🔐 *Bingo Login Code*\n\nYour 6-digit code: `{}`\n\nThis code expires in {} minutes.\n\nEnter this code on the Bingo website to login.",
+        'bingo_otp_button': "🔐 Bingo Code"
     },
     'am': {
         'welcome': "🎉 *እንኳን ወደ ኢስቲፍ ቢንጎ በደህና መጡ!* 🎉\n\n👇 ምርጫ ይምረጡ:",
@@ -101,7 +181,9 @@ TEXTS = {
         'approved_deposit': "✅ *ተቀማጭ ገንዘብ ጸድቋል!*\n💰 መጠን: {} ብር\n💵 አዲስ ቀሪ ሂሳብ: {} ብር",
         'approved_cashout': "✅ *ገንዘብ ማውጣት ጸድቋል!*\n💰 መጠን: {} ብር\n💵 አዲስ ቀሪ ሂሳብ: {} ብር",
         'rejected': "❌ *ውድቅ ተደርጓል*\n📝 ምክንያት: {}",
-        'use_menu': "እባክዎ ከታች ያለውን ምናሌ ይጠቀሙ:"
+        'use_menu': "እባክዎ ከታች ያለውን ምናሌ ይጠቀሙ:",
+        'bingo_otp': "🔐 *የቢንጎ መግቢያ ኮድ*\n\n6-አሃዝ ኮድዎ: `{}`\n\nይህ ኮድ በ{} ደቂቃ ውስጥ ያበቃል.\n\nእባክዎ ይህን ኮድ በቢንጎ ድህረ ገጽ ላይ ያስገቡ።",
+        'bingo_otp_button': "🔐 የቢንጎ ኮድ"
     }
 }
 
@@ -146,12 +228,14 @@ def menu(lang='en'):
     if lang == 'am':
         return ReplyKeyboardMarkup([
             ["🎮 ጨዋታ", "📝 ተመዝገብ", "💰 ገንዘብ አስገባ"],
-            ["💳 ገንዘብ አውጣ", "📞 ደንበኛ አገልግሎት", "🎉 ጋብዝ"]
+            ["💳 ገንዘብ አውጣ", "📞 ደንበኛ አገልግሎት", "🎉 ጋብዝ"],
+            ["🔐 የቢንጎ ኮድ"]
         ], resize_keyboard=True)
     else:
         return ReplyKeyboardMarkup([
             ["🎮 Play", "📝 Register", "💰 Deposit"],
-            ["💳 Cash Out", "📞 Contact Center", "🎉 Invite"]
+            ["💳 Cash Out", "📞 Contact Center", "🎉 Invite"],
+            ["🔐 Bingo Code"]
         ], resize_keyboard=True)
 
 # ========== CHECK JOINED GROUP ==========
@@ -369,6 +453,23 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(TEXTS[lang]['balance'].format(user_data.get('balance', 0), user_data.get('total_deposited', 0)), parse_mode='Markdown', reply_markup=menu(lang))
     else:
         await update.message.reply_text("❌ Please register first!", reply_markup=menu(lang))
+
+# ========== BINGO OTP ==========
+async def bingo_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send Bingo login OTP to user"""
+    reset_flow(context)
+    user_id = update.effective_user.id
+    lang = get_lang(str(user_id))
+    
+    # Generate and store OTP
+    otp = store_otp(user_id)
+    
+    # Send OTP message
+    await update.message.reply_text(
+        TEXTS[lang]['bingo_otp'].format(otp, OTP_EXPIRY_MINUTES),
+        parse_mode='Markdown',
+        reply_markup=menu(lang)
+    )
 
 # ========== UNIVERSAL TEXT HANDLER ==========
 async def handle_all_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -684,6 +785,7 @@ def main():
     # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
+    app.add_handler(CommandHandler("bingo", bingo_otp))  # NEW: /bingo command
     app.add_handler(CommandHandler("approve_deposit", approve_deposit))
     app.add_handler(CommandHandler("reject_deposit", reject_deposit))
     app.add_handler(CommandHandler("approve_cashout", approve_cashout))
@@ -696,11 +798,12 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("💳 Cash Out|💳 ገንዘብ አውጣ"), cashout))
     app.add_handler(MessageHandler(filters.Regex("📞 Contact Center|📞 ደንበኛ አገልግሎት"), contact_center))
     app.add_handler(MessageHandler(filters.Regex("🎉 Invite|🎉 ጋብዝ"), invite))
+    app.add_handler(MessageHandler(filters.Regex("🔐 Bingo Code|🔐 የቢንጎ ኮድ"), bingo_otp))  # NEW: Bingo button
     
     # Contact handler
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     
-    # Callback handlers (only for language, joined, deposit method, cashout method)
+    # Callback handlers
     app.add_handler(CallbackQueryHandler(language_callback, pattern="lang_"))
     app.add_handler(CallbackQueryHandler(joined_callback, pattern="joined"))
     app.add_handler(CallbackQueryHandler(deposit_cb, pattern="dep_"))
@@ -715,7 +818,8 @@ def main():
     print(f"👤 Account Holder: {ACCOUNT_HOLDER}")
     print(f"🎮 Game URL: {GAME_WEB_URL}")
     print("🌐 Bilingual: English + Amharic")
-    print("📋 Admin receives copyable text commands (no inline buttons)")
+    print("🔐 Bingo OTP: Enabled (/bingo command + button)")
+    print("📡 API Endpoint: /api/verify-otp")
     print("=" * 50)
     app.run_polling()
 
