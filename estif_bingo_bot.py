@@ -455,30 +455,24 @@ async def handle_all_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             save_user(user_id, user_data)
             
-            # Store in bot_data for quick access
-            context.bot_data[f'cashout_req_{request_id}'] = {
-                'user_id': user_id,
-                'amount': data['amount'],
-                'account': account,
-                'method': data['method']
-            }
-            
-            # Create inline keyboard with ACTUAL COMMAND TEXT on buttons
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"/approve_cashout {user_id} {data['amount']}", callback_data=f"copy_approve_cashout_{request_id}")],
-                [InlineKeyboardButton(f"/reject_cashout {user_id}", callback_data=f"copy_reject_cashout_{user_id}")]
-            ])
-            
-            admin_text = f"""💳 **NEW CASHOUT REQUEST** #{request_id}
+            # SEND COPYABLE TEXT (NO INLINE BUTTONS)
+            copy_text = f"""
+💰 *CASHOUT REQUEST* #{request_id}
 
-👤 User ID: {user_id}
-💰 Amount: {data['amount']} Birr
-💳 Method: {data['method']}
-📱 Account: {account}
+👤 User ID: `{user_id}`
+💰 Amount: `{data['amount']}` Birr
+💳 Method: `{data['method']}`
+📱 Account: `{account}`
 
-Click a button below to copy the command, then paste and send:"""
-            
-            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text, reply_markup=keyboard, parse_mode='Markdown')
+Click to copy (select and Ctrl+C):
+
+`/approve_cashout {user_id} {data['amount']}`
+
+or
+
+`/reject_cashout {user_id}`
+"""
+            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=copy_text, parse_mode='Markdown')
             
             await update.message.reply_text(TEXTS[lang]['cashout_sent'], reply_markup=menu(lang), parse_mode='Markdown')
             
@@ -501,76 +495,31 @@ async def handle_deposit_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     # Generate request ID
     request_id = random.randint(100000, 999999)
     
-    # Store in bot_data for quick access
-    context.bot_data[f'deposit_req_{request_id}'] = {
-        'user_id': user_id,
-        'amount': data['amount'],
-        'method': data['method'],
-        'account_number': data['account_number']
-    }
-    
-    # Create inline keyboard with ACTUAL COMMAND TEXT on buttons
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"/approve_deposit {user_id} {data['amount']}", callback_data=f"copy_approve_deposit_{request_id}")],
-        [InlineKeyboardButton(f"/reject_deposit {user_id}", callback_data=f"copy_reject_deposit_{user_id}")]
-    ])
-    
-    admin_text = f"""💰 **NEW DEPOSIT REQUEST** #{request_id}
+    # SEND COPYABLE TEXT (NO INLINE BUTTONS)
+    copy_text = f"""
+💰 *NEW DEPOSIT REQUEST* #{request_id}
 
 👤 User: {user.first_name} (@{user.username or 'N/A'})
-🆔 ID: {user_id}
-💰 Amount: {data['amount']} Birr
-🏦 Method: {data['method']}
-📋 Account: {data['account_number']}
+🆔 ID: `{user_id}`
+💰 Amount: `{data['amount']}` Birr
+🏦 Method: `{data['method']}`
+📋 Account: `{data['account_number']}`
 
-Click a button below to copy the command, then paste and send:"""
-    
-    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text, reply_markup=keyboard, parse_mode='Markdown')
+Click to copy (select and Ctrl+C):
+
+`/approve_deposit {user_id} {data['amount']}`
+
+or
+
+`/reject_deposit {user_id}`
+"""
+    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=copy_text, parse_mode='Markdown')
     await context.bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=photo.file_id, caption=f"Deposit proof from {user.first_name}")
     
     await update.message.reply_text(TEXTS[lang]['deposit_sent'], reply_markup=menu(lang), parse_mode='Markdown')
     
     # RESET FLOW
     reset_flow(context)
-
-# ========== COPY COMMAND CALLBACK (CLICK TO COPY - SHOWS ACTUAL COMMAND) ==========
-async def copy_command_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    
-    # Deposit Approve - Show actual command
-    if data.startswith("copy_approve_deposit_"):
-        request_id = data.replace("copy_approve_deposit_", "")
-        req = context.bot_data.get(f'deposit_req_{request_id}')
-        if req:
-            command = f"/approve_deposit {req['user_id']} {req['amount']}"
-            await query.answer(text=f"{command}", show_alert=True)
-        else:
-            await query.answer(text="❌ Request not found", show_alert=True)
-    
-    # Deposit Reject - Show actual command
-    elif data.startswith("copy_reject_deposit_"):
-        user_id = data.replace("copy_reject_deposit_", "")
-        command = f"/reject_deposit {user_id}"
-        await query.answer(text=f"{command}", show_alert=True)
-    
-    # Cashout Approve - Show actual command
-    elif data.startswith("copy_approve_cashout_"):
-        request_id = data.replace("copy_approve_cashout_", "")
-        req = context.bot_data.get(f'cashout_req_{request_id}')
-        if req:
-            command = f"/approve_cashout {req['user_id']} {req['amount']}"
-            await query.answer(text=f"{command}", show_alert=True)
-        else:
-            await query.answer(text="❌ Request not found", show_alert=True)
-    
-    # Cashout Reject - Show actual command
-    elif data.startswith("copy_reject_cashout_"):
-        user_id = data.replace("copy_reject_cashout_", "")
-        command = f"/reject_cashout {user_id}"
-        await query.answer(text=f"{command}", show_alert=True)
 
 # ========== ADMIN COMMANDS ==========
 async def approve_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -751,12 +700,11 @@ def main():
     # Contact handler
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     
-    # Callback handlers
+    # Callback handlers (only for language, joined, deposit method, cashout method)
     app.add_handler(CallbackQueryHandler(language_callback, pattern="lang_"))
     app.add_handler(CallbackQueryHandler(joined_callback, pattern="joined"))
     app.add_handler(CallbackQueryHandler(deposit_cb, pattern="dep_"))
     app.add_handler(CallbackQueryHandler(cashout_cb, pattern="cash_"))
-    app.add_handler(CallbackQueryHandler(copy_command_callback, pattern="^copy_"))
     
     # Text and photo handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_text))
@@ -767,7 +715,7 @@ def main():
     print(f"👤 Account Holder: {ACCOUNT_HOLDER}")
     print(f"🎮 Game URL: {GAME_WEB_URL}")
     print("🌐 Bilingual: English + Amharic")
-    print("📋 Admin commands are now click-to-copy with actual command text!")
+    print("📋 Admin receives copyable text commands (no inline buttons)")
     print("=" * 50)
     app.run_polling()
 
